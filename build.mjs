@@ -5,10 +5,17 @@
 //   node build.mjs
 //
 // Edit the DATA section, run it, commit assets/.
+//
+// gitlog.svg and langs.svg are pulled live from the GitHub API. The Action in
+// .github/workflows/refresh.yml reruns this every few hours and commits them.
+// Set GITHUB_TOKEN to dodge rate limits; set GH_STATS_TOKEN (a PAT with repo
+// read) to also count private repos in the language stats (never the git log).
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 
 // ---------- DATA ----------
+
+const GH_USER = "iickza";
 
 const TAGLINE = "> reverse engineering, game internals & tools";
 
@@ -210,7 +217,7 @@ function panel(title, height, inner) {
   return svg(w, h, `
 <style>${PIXEL}${TERM}
 .t{font:23px term,monospace;fill:${C.text}}
-.hi{fill:${C.yellow}}.link{fill:${C.cyan}}.dim{fill:${C.dim}}
+.hi{fill:${C.yellow}}.link{fill:${C.cyan}}.dim{fill:${C.dim}}.ok{fill:${C.green}}
 .k{font:23px term,monospace;fill:${C.yellow};text-transform:uppercase}
 .v{font:23px term,monospace;fill:${C.cyan}}
 .mask{paint-order:stroke;stroke:${C.panel};stroke-width:14px;stroke-linejoin:miter}
@@ -251,6 +258,107 @@ const posts = () => panel("latest posts", 70 + POSTS.length * 30 + 20, rows(POST
 
 const projects = () =>
   panel("projects", 112, `<text class="t dim" x="40" y="72">Nothing released yet. <tspan class="link">Watch this space.</tspan></text>`);
+
+// ---------- live github panels ----------
+
+const ADV = 9.2; // VT323 at 23px is monospace, 0.4em per char
+
+async function gh(path, token) {
+  const headers = { Accept: "application/vnd.github+json", "User-Agent": GH_USER };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const r = await fetch(`https://api.github.com${path}`, { headers });
+  if (!r.ok) throw new Error(`${path}: ${r.status}`);
+  return r.json();
+}
+
+async function fetchGitHub() {
+  const pub = process.env.GITHUB_TOKEN;
+  const priv = process.env.GH_STATS_TOKEN;
+  const repos = (
+    priv
+      ? await gh(`/user/repos?affiliation=owner&per_page=100`, priv)
+      : await gh(`/users/${GH_USER}/repos?per_page=100`, pub)
+  ).filter((r) => !r.fork && !r.archived);
+
+  // languages: bytes summed across every repo
+  const bytes = {};
+  for (const r of repos) {
+    const langs = await gh(`/repos/${r.full_name}/languages`, priv || pub);
+    for (const [k, v] of Object.entries(langs)) bytes[k] = (bytes[k] || 0) + v;
+  }
+
+  // git log: latest human commits from the most recently pushed public repos
+  const recent = repos
+    .filter((r) => !r.private)
+    .sort((a, b) => new Date(b.pushed_at) - new Date(a.pushed_at))
+    .slice(0, 6);
+  const commits = [];
+  for (const r of recent) {
+    const list = await gh(`/repos/${r.full_name}/commits?per_page=10`, pub).catch(() => []);
+    for (const c of list) {
+      if (c.author?.login?.endsWith("[bot]")) continue;
+      commits.push({ sha: c.sha.slice(0, 7), repo: r.name, msg: c.commit.message.split("\n")[0], date: c.commit.author.date });
+    }
+  }
+  commits.sort((a, b) => new Date(b.date) - new Date(a.date));
+  return { bytes, commits: commits.slice(0, 6) };
+}
+
+function gitlog(commits) {
+  const y0 = 108;
+  const lines = commits.length
+    ? commits
+        .map((c, i) => {
+          const y = y0 + i * 30;
+          const msgX = 40 + (8 + c.repo.length + 1) * ADV;
+          const max = Math.floor((800 - 12 * ADV - msgX) / ADV);
+          const msg = c.msg.length > max ? c.msg.slice(0, max - 1) + "…" : c.msg;
+          return `<text class="t" x="40" y="${y}"><tspan fill="${C.magenta}">${c.sha}</tspan> <tspan class="link">${esc(c.repo)}</tspan> ${esc(msg)}</text>
+<text class="t dim" x="800" y="${y}" text-anchor="end">${c.date.slice(0, 10)}</text>`;
+        })
+        .join("\n")
+    : `<text class="t dim" x="40" y="${y0}">nothing pushed yet.</text>`;
+  const n = Math.max(1, commits.length);
+  return panel("git log", y0 + (n - 1) * 30 + 48, `
+<text class="t ok" x="40" y="72">${GH_USER}@github:~$ <tspan class="hi">git log --oneline -n 6</tspan></text>
+${lines}`);
+}
+
+function langs(bytes) {
+  const cols = [C.cyan, C.magenta, C.yellow, C.green, "#b4aaff", "#ff8a3f"];
+  const total = Object.values(bytes).reduce((a, b) => a + b, 0);
+  let list = Object.entries(bytes).sort((a, b) => b[1] - a[1]);
+  if (list.length > 6) list = [...list.slice(0, 5), ["other", list.slice(5).reduce((a, [, v]) => a + v, 0)]];
+  if (!total) return panel("languages", 112, `<text class="t dim" x="40" y="72">no code yet.</text>`);
+
+  // stacked bar, grows in from the left
+  let x = 40, bar = "";
+  list.forEach(([, v], i) => {
+    const w = i === list.length - 1 ? 800 - x : Math.round((v / total) * 760);
+    bar += `<rect x="${x}" y="54" width="${w}" height="18" fill="${cols[i]}"/>`;
+    x += w;
+  });
+
+  // two columns of name ... pct
+  const y0 = 112, half = Math.ceil(list.length / 2);
+  const rowsSvg = list
+    .map(([k, v], i) => {
+      const col = i < half ? 0 : 1, y = y0 + (i % half) * 30;
+      const x0 = col ? 440 : 40, x1 = col ? 800 : 400;
+      const pct = ((v / total) * 100).toFixed(1) + "%";
+      return `<line x1="${x0}" y1="${y - 5}" x2="${x1}" y2="${y - 5}" stroke="${C.dim}" stroke-width="2" stroke-dasharray="2 4"/>
+<rect x="${x0}" y="${y - 15}" width="14" height="14" fill="${cols[i]}"/>
+<text class="k mask" x="${x0 + 22}" y="${y}">${esc(k)}</text>
+<text class="v mask" x="${x1}" y="${y}" text-anchor="end">${pct}</text>`;
+    })
+    .join("\n");
+
+  return panel("languages", y0 + (half - 1) * 30 + 48, `
+<style>.grow{transform-box:view-box;transform-origin:40px 0;animation:gr 1.2s steps(16) both}@keyframes gr{from{transform:scaleX(0)}}</style>
+<rect x="38" y="52" width="764" height="22" fill="none" stroke="${C.dim}" stroke-width="2"/>
+<g class="grow">${bar}</g>
+${rowsSvg}`);
+}
 
 // ---------- nav buttons ----------
 
@@ -317,3 +425,12 @@ out("posts.svg", posts());
 out("projects.svg", projects());
 for (const [file, num, label] of BUTTONS) out(`btn-${file}.svg`, button(num, label));
 out("footer.svg", footer());
+
+// a failed fetch keeps the last committed gitlog/langs instead of blanking them
+try {
+  const { bytes, commits } = await fetchGitHub();
+  out("gitlog.svg", gitlog(commits));
+  out("langs.svg", langs(bytes));
+} catch (e) {
+  console.warn(`github fetch failed, kept old gitlog/langs: ${e.message}`);
+}

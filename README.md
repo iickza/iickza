@@ -15,6 +15,10 @@
 
 <a href="https://ickza.top/projects/"><img src="assets/projects.svg" width="100%" alt="Projects: nothing released yet. Watch this space."></a>
 
+<a href="https://github.com/iickza?tab=repositories"><img src="assets/gitlog.svg" width="100%" alt="git log: my latest commits"></a>
+
+<img src="assets/langs.svg" width="100%" alt="Languages I write, by bytes of code across my repos">
+
 <a href="https://ickza.top"><img src="assets/footer.svg" width="100%" alt="(c) 2026 ickza, made by hand"></a>
 
 <p align="center"><img src="https://komarev.com/ghpvc/?username=iickza&label=VISITORS&color=ff3fa4&style=flat-square" alt="profile views"></p>
