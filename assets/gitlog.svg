@@ -18,16 +18,16 @@
 <text class="h2" x="32" y="27"><tspan fill="#ff3fa4">» </tspan>GIT LOG</text>
 
 <text class="t ok" x="40" y="72">iickza@github:~$ <tspan class="hi">git log --oneline -n 6</tspan></text>
-<text class="t" x="40" y="108"><tspan fill="#ff3fa4">67b7971</tspan> <tspan class="link">iickza</tspan> refresh git log + languages</text>
+<text class="t" x="40" y="108"><tspan fill="#ff3fa4">ddd5788</tspan> <tspan class="link">iickza</tspan> refresh git log + languages</text>
 <text class="t dim" x="800" y="108" text-anchor="end">2026-10-29</text>
-<text class="t" x="40" y="138"><tspan fill="#ff3fa4">4e487e6</tspan> <tspan class="link">iickza</tspan> refresh git log + languages</text>
+<text class="t" x="40" y="138"><tspan fill="#ff3fa4">67b7971</tspan> <tspan class="link">iickza</tspan> refresh git log + languages</text>
 <text class="t dim" x="800" y="138" text-anchor="end">2026-10-29</text>
-<text class="t" x="40" y="168"><tspan fill="#ff3fa4">d051aff</tspan> <tspan class="link">iickza</tspan> refresh git log + languages</text>
+<text class="t" x="40" y="168"><tspan fill="#ff3fa4">4e487e6</tspan> <tspan class="link">iickza</tspan> refresh git log + languages</text>
 <text class="t dim" x="800" y="168" text-anchor="end">2026-10-29</text>
-<text class="t" x="40" y="198"><tspan fill="#ff3fa4">cefe6c4</tspan> <tspan class="link">iickza</tspan> refresh git log + languages</text>
-<text class="t dim" x="800" y="198" text-anchor="end">2026-10-28</text>
-<text class="t" x="40" y="228"><tspan fill="#ff3fa4">a2c31cd</tspan> <tspan class="link">iickza</tspan> refresh git log + languages</text>
+<text class="t" x="40" y="198"><tspan fill="#ff3fa4">d051aff</tspan> <tspan class="link">iickza</tspan> refresh git log + languages</text>
+<text class="t dim" x="800" y="198" text-anchor="end">2026-10-29</text>
+<text class="t" x="40" y="228"><tspan fill="#ff3fa4">cefe6c4</tspan> <tspan class="link">iickza</tspan> refresh git log + languages</text>
 <text class="t dim" x="800" y="228" text-anchor="end">2026-10-28</text>
-<text class="t" x="40" y="258"><tspan fill="#ff3fa4">40c631a</tspan> <tspan class="link">iickza</tspan> refresh git log + languages</text>
+<text class="t" x="40" y="258"><tspan fill="#ff3fa4">a2c31cd</tspan> <tspan class="link">iickza</tspan> refresh git log + languages</text>
 <text class="t dim" x="800" y="258" text-anchor="end">2026-10-28</text>
 </svg>
