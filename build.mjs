@@ -1,6 +1,10 @@
-// Builds the animated SVGs in assets/ for the GitHub profile README.
+// Builds the SVGs in assets/ for the GitHub profile README.
 // GitHub strips CSS/JS from READMEs, but SVGs loaded as images keep their
-// own <style> animations, so all the demoscene stuff lives in here.
+// own <style> animations, so all the styling lives in here.
+//
+// The page is laid out as a disassembly listing. The listing is real: strings
+// sit at real offsets, the bytes column is their real encoding, and the
+// lea/call displacements are worked out from those offsets.
 //
 //   node build.mjs
 //
@@ -17,7 +21,9 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 
 const GH_USER = "iickza";
 
-const TAGLINE = "> reverse engineering, game internals & tools";
+const NAME = "ickza";
+
+const TAGLINE = "reverse engineering, game internals & tools";
 
 const ABOUT = [
   ["Hey, I'm ", ["ickza", "hi"], ". I write code, break things,"],
@@ -26,6 +32,7 @@ const ABOUT = [
   ["and whatever tool I'm building that week."],
 ];
 
+// exactly five: they fill the four win64 arg registers plus one stack slot
 const NFO = [
   ["handle", "ickza"],
   ["focus", "reverse engineering"],
@@ -40,228 +47,248 @@ const POSTS = [
 ];
 
 const BUTTONS = [
-  ["site", "1", "SITE"],
-  ["blog", "2", "BLOG"],
-  ["discord", "3", "DISCORD"],
-  ["uc", "4", "UC"],
-  ["coffee", "5", "COFFEE"],
-  ["email", "6", "EMAIL"],
+  ["site", "jmp", "site"],
+  ["blog", "jmp", "blog"],
+  ["discord", "call", "discord"],
+  ["uc", "call", "uc"],
+  ["coffee", "push", "coffee"],
+  ["email", "mov", "email"],
 ];
 
-const SCROLLER =
-  "*** WELCOME TO ICKZA ON GITHUB *** REVERSE ENGINEERING * GAME INTERNALS * TOOLS " +
-  "*** POSTS, PROJECTS AND MORE AT ICKZA.TOP *** HIT THE DISCORD IF YOU WANNA TALK SHOP " +
-  "*** GREETZ TO EVERYONE AT UNKNOWNCHEATS *** MADE BY HAND, NO TEMPLATES ***";
+const GREETZ = "greetz to everyone at unknowncheats";
 
-// ---------- palette / fonts (same as ickza.top) ----------
+// ---------- palette / fonts ----------
 
 const C = {
-  bg: "#05030c",
-  panel: "#08051a",
-  text: "#d9d4f5",
-  dim: "#6f6a96",
-  cyan: "#3ff6ff",
-  magenta: "#ff3fa4",
-  yellow: "#ffe23f",
-  green: "#5dff6b",
+  bg: "#0e1217",
+  band: "#141a21",
+  line: "#262e38",
+  text: "#c9d1d9",
+  dim: "#5d6875",
+  bytes: "#7f8b98",
+  mnem: "#7cb7ff",
+  label: "#ff9e7a",
+  string: "#e8bb5a",
+  note: "#7fa883",
+  violet: "#b9a2ff",
 };
 
-const font = (name, file) =>
-  `@font-face{font-family:${name};src:url(data:font/woff2;base64,${readFileSync(
+const font = (weight, file) =>
+  `@font-face{font-family:jb;font-weight:${weight};src:url(data:font/woff2;base64,${readFileSync(
     new URL(`./assets/fonts/${file}`, import.meta.url)
   ).toString("base64")}) format("woff2")}`;
-const PIXEL = font("px", "ps2p.woff2");
-const TERM = font("term", "vt323.woff2");
+const REGULAR = font(400, "jetbrains-mono-latin-400-normal.woff2");
+const BOLD = font(700, "jetbrains-mono-latin-700-normal.woff2");
 
 const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-// deterministic random so rebuilds don't churn the diff
-let seed = 1337;
-const rnd = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
-
 const svg = (w, h, body, title) =>
-  `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(title)}" shape-rendering="crispEdges">
+  `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(title)}">
 <title>${esc(title)}</title>
 ${body}
 </svg>
 `;
 
-const scanlines = (w, h) => `
-<defs>
-  <pattern id="scan" width="4" height="3" patternUnits="userSpaceOnUse"><rect y="2" width="4" height="1" fill="#000" fill-opacity=".28"/></pattern>
-  <radialGradient id="vig" cx=".5" cy=".5" r=".75"><stop offset=".6" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".65"/></radialGradient>
-</defs>
-<rect width="${w}" height="${h}" fill="url(#scan)"/>
-<rect width="${w}" height="${h}" fill="url(#vig)"/>`;
+// JetBrains Mono is 0.6em wide, so 15px text sits on a 9px character grid
+const W = 840, PAD = 24, FS = 15, ADV = 9, LH = 24;
+const COLS = (W - 2 * PAD) / ADV;
+const col = (n) => PAD + n * ADV;
+const BYTES = 11, MNEM = 33, OPS = 39, NOTE = 58;
 
-const stars = (w, h, n) => {
-  const cols = ["#ffffff", "#ffffff", "#b4aaff", C.cyan, C.magenta, C.yellow];
-  let out = "";
-  for (let i = 0; i < n; i++) {
-    const big = rnd() < 0.08;
-    const c = cols[rnd() < 0.7 ? Math.floor(rnd() * 3) : 3 + Math.floor(rnd() * 3)];
-    const d = (0.7 + rnd() * 2).toFixed(2);
-    const dl = (-rnd() * 3).toFixed(2);
-    out += `<rect class="st" x="${Math.floor(rnd() * w)}" y="${Math.floor(rnd() * h)}" width="${big ? 2 : 1}" height="${big ? 2 : 1}" fill="${c}" style="animation-duration:${d}s;animation-delay:${dl}s"/>`;
-  }
-  return out;
+const BASE_CSS = `text{font-family:jb,ui-monospace,monospace;font-size:${FS}px;font-variant-ligatures:none;white-space:pre;fill:${C.text}}
+.a{fill:${C.dim}}.b{fill:${C.bytes}}.m{fill:${C.mnem}}.l{fill:${C.label};font-weight:700}
+.s{fill:${C.string}}.c{fill:${C.note}}.d{fill:${C.dim}}
+.hi{font-weight:700;fill:${C.label}}.link{fill:${C.mnem}}`;
+
+const card = (h, fill = C.bg) =>
+  `<rect x=".5" y=".5" width="${W - 1}" height="${h - 1}" rx="6" fill="${fill}" stroke="${C.line}"/>`;
+
+const text = (x, y, cls, s) => `<text class="${cls}" x="${x}" y="${y}">${esc(s)}</text>`;
+const right = (y, cls, s) => `<text class="${cls}" x="${W - PAD}" y="${y}" text-anchor="end">${esc(s)}</text>`;
+const fit = (s, max) => (s.length > max ? s.slice(0, max - 1) + "…" : s);
+
+// ---------- the image: where everything lives ----------
+
+const TEXT = 0x140001000, RDATA = 0x140002000, BSS = 0x140003000;
+const WHOAMI = 0x140001200;
+
+const addr = (n) => n.toString(16).toUpperCase().padStart(9, "0");
+const hex = (bytes) => bytes.map((b) => b.toString(16).toUpperCase().padStart(2, "0")).join(" ");
+const le32 = (v) => [0, 8, 16, 24].map((s) => (v >>> s) & 255);
+const cstr = (s) => [...Buffer.from(s + "\0")];
+
+// .rdata holds the NFO strings, then the post titles
+let rdata = RDATA;
+const place = (s) => {
+  const at = rdata;
+  rdata += cstr(s).length;
+  return at;
 };
-const STAR_CSS = `.st{animation:tw 2s ease-in-out infinite alternate}@keyframes tw{from{opacity:.25}to{opacity:1}}`;
-const STILL_CSS = `@media (prefers-reduced-motion:reduce){*{animation:none!important}}`;
+const NFO_AT = NFO.map(([, v]) => place(v));
+const POST_AT = POSTS.map(([, title]) => place(title));
 
-// ---------- header ----------
+// ---------- listing rows: each is a function of its baseline y ----------
 
-const LOGO = [
-  "██╗ ██████╗██╗  ██╗███████╗ █████╗ ",
-  "██║██╔════╝██║ ██╔╝╚══███╔╝██╔══██╗",
-  "██║██║     █████╔╝   ███╔╝ ███████║",
-  "██║██║     ██╔═██╗  ███╔╝  ██╔══██║",
-  "██║╚██████╗██║  ██╗███████╗██║  ██║",
-  "╚═╝ ╚═════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝",
-];
+const code = (at, bytes, mnem, ops, note, noteCls = "c") => (y) =>
+  [
+    text(col(0), y, "a", addr(at)),
+    text(col(BYTES), y, "b", bytes),
+    text(col(MNEM), y, "m", mnem),
+    ops ? text(col(OPS), y, "", ops) : "",
+    note ? text(col(NOTE), y, noteCls, note) : "",
+  ].join("");
 
-function logo(x0, y0, W, H) {
-  const ax = 0.3 * W, bx = 0.7 * W, ay = 0.38 * H, by = 0.62 * H;
-  // double-line box glyphs as polylines inside one cell
-  const glyph = {
-    "═": [[[0, ay], [W, ay]], [[0, by], [W, by]]],
-    "║": [[[ax, 0], [ax, H]], [[bx, 0], [bx, H]]],
-    "╗": [[[0, ay], [bx, ay], [bx, H]], [[0, by], [ax, by], [ax, H]]],
-    "╔": [[[W, ay], [ax, ay], [ax, H]], [[W, by], [bx, by], [bx, H]]],
-    "╝": [[[0, by], [bx, by], [bx, 0]], [[0, ay], [ax, ay], [ax, 0]]],
-    "╚": [[[W, by], [ax, by], [ax, 0]], [[W, ay], [bx, ay], [bx, 0]]],
-  };
-  let blocks = "", lines = "";
-  LOGO.forEach((row, r) => {
-    const chars = [...row];
-    for (let c = 0; c < chars.length; c++) {
-      const x = x0 + c * W, y = y0 + r * H;
-      if (chars[c] === "█") {
-        let n = 1;
-        while (chars[c + n] === "█") n++;
-        blocks += `<rect x="${x}" y="${y}" width="${n * W}" height="${H}"/>`;
-        c += n - 1;
-      } else if (glyph[chars[c]]) {
-        for (const p of glyph[chars[c]])
-          lines += `<polyline points="${p.map(([px, py]) => `${x + px},${y + py}`).join(" ")}"/>`;
-      }
-    }
-  });
-  return { blocks, lines, w: [...LOGO[0]].length * W, h: LOGO.length * H };
+const comment = (at, parts) => (y) =>
+  text(col(0), y, "a", addr(at)) +
+  `<text class="c" x="${col(BYTES)}" y="${y}">; ${parts
+    .map((p) => (Array.isArray(p) ? `<tspan class="${p[1]}">${esc(p[0])}</tspan>` : esc(p)))
+    .join("")}</text>`;
+
+const label = (at, name, rest = "") => (y) =>
+  text(col(0), y, "a", addr(at)) +
+  `<text x="${col(BYTES)}" y="${y}"><tspan class="l">${esc(name)}</tspan>${rest ? ` <tspan class="m">${esc(rest)}</tspan>` : ""}</text>`;
+
+// IDA's banner: ; =============== S U B R O U T I N E ===========...
+function banner(title, y) {
+  const mid = ` ${title.toUpperCase().split("").join(" ")} `;
+  return text(col(0), y, "d", `; ${"=".repeat(15)}${mid}${"=".repeat(COLS - 17 - mid.length)}`);
 }
+
+function panel(title, rows) {
+  const top = 34, y0 = top + LH + 4;
+  const h = y0 + (rows.length - 1) * LH + 22;
+  const body = rows.map((r, i) => r(y0 + i * LH)).join("\n");
+  return svg(W, h, `
+<style>${REGULAR}${BOLD}${BASE_CSS}</style>
+${card(h)}
+${banner(title, top)}
+${body}`, title);
+}
+
+// ---------- header: a hex view of the tagline ----------
 
 function header() {
-  const w = 840, h = 290;
-  const W = 17, H = 27;
-  const size = logo(0, 0, W, H);
-  const lx = Math.round((w - size.w) / 2) + 6, ly = 34;
-  const lg = logo(lx, ly, W, H);
-  // VT323 is monospace at 0.4em, so the cursor can step along with the typing
-  const tagChars = [...TAGLINE], tfs = 28, adv = tfs * 0.4, step = 0.055, start = 1.1;
-  const tx = Math.round((w - (tagChars.length + 1) * adv) / 2), tyY = ly + lg.h + 58;
-  const body = `
-<style>${TERM}${STAR_CSS}
-.crt{transform-box:view-box;transform-origin:420px 145px;animation:on .8s cubic-bezier(.2,.9,.3,1) both}
-@keyframes on{0%{transform:scale(1,.004);opacity:0}40%{transform:scale(1,.004);opacity:1}70%{transform:scale(1,1.04)}100%{transform:none}}
-.cb{animation:cb 3.2s ease-in-out infinite alternate}
-@keyframes cb{from{transform:translateY(0)}to{transform:translateY(${lg.h + 40 - 16}px)}}
-.tag{font:${tfs}px term,monospace;fill:${C.green}}
-.mv{animation:mv ${(tagChars.length * step).toFixed(3)}s steps(${tagChars.length}, end) ${start}s forwards}
-@keyframes mv{to{transform:translateX(${(tagChars.length * adv).toFixed(1)}px)}}
-.cur{animation:bl 1s steps(1) infinite}@keyframes bl{50%{opacity:0}}
-.top{font:9px px,monospace;fill:${C.dim};letter-spacing:1px}
-${STILL_CSS}</style>
-<defs>
-  <linearGradient id="shim" gradientUnits="userSpaceOnUse" x1="0" y1="${ly}" x2="0" y2="${ly + lg.h * 3}" spreadMethod="repeat">
-    <stop offset="0" stop-color="#fff"/><stop offset=".22" stop-color="${C.yellow}"/><stop offset=".5" stop-color="${C.magenta}"/><stop offset=".78" stop-color="${C.cyan}"/><stop offset="1" stop-color="#fff"/>
-    <animateTransform attributeName="gradientTransform" type="translate" from="0 0" to="0 ${lg.h * 3}" dur="4s" repeatCount="indefinite"/>
-  </linearGradient>
-  ${[C.magenta, C.cyan, C.yellow, C.green]
-    .map((c, i) => `<linearGradient id="cu${i}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#000"/><stop offset=".3" stop-color="${c}"/><stop offset=".5" stop-color="#fff"/><stop offset=".7" stop-color="${c}"/><stop offset="1" stop-color="#000"/></linearGradient>`)
-    .join("\n  ")}
-  <filter id="logofx" x="-10%" y="-20%" width="120%" height="150%">
-    <feDropShadow dx="0" dy="0" stdDeviation="6" flood-color="${C.magenta}" flood-opacity=".55"/>
-    <feDropShadow dx="4" dy="4" stdDeviation="0" flood-color="#000" flood-opacity="1"/>
-  </filter>
-  <filter id="glow" x="-5%" y="-50%" width="110%" height="200%">
-    <feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
-  </filter>
-  <clipPath id="typeclip"><rect class="mv" x="${tx - tagChars.length * adv}" y="${tyY - 30}" width="${tagChars.length * adv}" height="40"/></clipPath>
-  <clipPath id="cuclip"><rect x="0" y="${ly - 20}" width="${w}" height="${lg.h + 40}"/></clipPath>
-</defs>
-<rect width="${w}" height="${h}" fill="${C.bg}"/>
-<g class="crt">
-  ${stars(w, h, 170)}
-  <g clip-path="url(#cuclip)" opacity=".72">
-    ${[0, 1, 2, 3].map((i) => `<rect class="cb" x="0" y="${ly - 20}" width="${w}" height="16" fill="url(#cu${i})" style="animation-delay:${-0.8 * i}s"/>`).join("\n    ")}
-  </g>
-  <g filter="url(#logofx)">
-    <g fill="url(#shim)">${lg.blocks}</g>
-    <g fill="none" stroke="url(#shim)" stroke-width="2.5" shape-rendering="geometricPrecision">${lg.lines}</g>
-  </g>
-  <g filter="url(#glow)">
-    <text class="tag" x="${tx}" y="${tyY}" clip-path="url(#typeclip)">${esc(TAGLINE)}</text>
-    <g class="mv"><rect class="cur" x="${tx + 2}" y="${tyY - 21}" width="${Math.round(tfs * 0.5)}" height="${Math.round(tfs * 0.85)}" fill="${C.green}"/></g>
-  </g>
-  <text class="top" x="14" y="18">ICKZA.TOP</text>
-  <text class="top" x="${w - 14}" y="18" text-anchor="end">EST. 2026</text>
-</g>
-${scanlines(w, h)}`;
-  return svg(w, h, body, "ickza: reverse engineering, game internals & tools");
+  const bytes = [...Buffer.from(`${NAME}: ${TAGLINE}`)];
+  const n = bytes.length, rowCount = Math.ceil(n / 16);
+  const y0 = 150, h = y0 + (rowCount - 1) * LH + 24;
+  const hexCol = (i) => col(BYTES + i * 3 + (i >= 8 ? 1 : 0));
+  const asciiCol = (i) => col(BYTES + 50 + i);
+
+  let dump = "";
+  for (let r = 0; r < rowCount; r++) {
+    const y = y0 + r * LH;
+    dump += text(col(0), y, "a", addr(r * 16));
+    for (let i = 0; i < 16; i++) {
+      const b = bytes[r * 16 + i];
+      const on = b !== undefined;
+      dump += text(hexCol(i), y, on ? "b" : "d", hex([b ?? 0]));
+      dump += text(asciiCol(i), y, on ? "s" : "d", on ? String.fromCharCode(b) : ".");
+    }
+  }
+
+  // the cursor walks the bytes, lit in both the hex and the ascii pane
+  const walk = (name, x) =>
+    `@keyframes ${name}{${bytes
+      .map((_, i) => `${((i / n) * 100).toFixed(2)}%{transform:translate(${x(i % 16)}px,${Math.floor(i / 16) * LH}px)}`)
+      .join("")}}`;
+  const dur = (n * 0.2).toFixed(1);
+  const css = `.big{font-size:60px;font-weight:700;letter-spacing:-1px}
+.hx{animation:hx ${dur}s step-end infinite}.as{animation:as ${dur}s step-end infinite}
+${walk("hx", hexCol)}${walk("as", asciiCol)}
+.cur{animation:bl 1.1s steps(1) infinite}@keyframes bl{50%{opacity:0}}
+@media (prefers-reduced-motion:reduce){.cur{animation:none}.hx,.as{display:none}}`;
+  const selY = y0 - 15;
+
+  return svg(W, h, `
+<style>${REGULAR}${BOLD}${BASE_CSS}${css}</style>
+${card(h)}
+<text class="big" x="${PAD - 2}" y="78">${esc(NAME)}</text>
+<rect class="cur" x="${PAD + NAME.length * 35 + 6}" y="34" width="26" height="46" fill="${C.label}"/>
+${right(34, "d", "ickza.top")}
+${text(col(0), 112, "c", `; ${TAGLINE}`)}
+<rect class="hx" x="-1" y="${selY}" width="${ADV * 2 + 2}" height="20" fill="${C.string}" fill-opacity=".28"/>
+<rect class="as" x="0" y="${selY}" width="${ADV}" height="20" fill="${C.string}" fill-opacity=".28"/>
+${dump}`, `${NAME}: ${TAGLINE}`);
 }
 
-// ---------- NFO-style panels ----------
-
-function panel(title, height, inner) {
-  const w = 840, h = height;
-  return svg(w, h, `
-<style>${PIXEL}${TERM}
-.t{font:23px term,monospace;fill:${C.text}}
-.hi{fill:${C.yellow}}.link{fill:${C.cyan}}.dim{fill:${C.dim}}.ok{fill:${C.green}}
-.k{font:23px term,monospace;fill:${C.yellow};text-transform:uppercase}
-.v{font:23px term,monospace;fill:${C.cyan}}
-.mask{paint-order:stroke;stroke:${C.panel};stroke-width:14px;stroke-linejoin:miter}
-.h2{font:12px px,monospace;fill:${C.yellow};letter-spacing:1px}
-.pulse{animation:pu 3s ease-in-out infinite alternate}@keyframes pu{from{opacity:.35}to{opacity:.9}}
-${STILL_CSS}</style>
-<defs><filter id="g" x="-5%" y="-10%" width="110%" height="120%"><feGaussianBlur stdDeviation="7"/></filter></defs>
-<rect class="pulse" x="8" y="18" width="${w - 16}" height="${h - 30}" fill="none" stroke="${C.cyan}" stroke-width="4" filter="url(#g)"/>
-<rect x="7" y="17" width="${w - 14}" height="${h - 28}" fill="${C.bg}" stroke="${C.cyan}" stroke-width="2"/>
-<rect x="13" y="23" width="${w - 26}" height="${h - 40}" fill="${C.panel}" stroke="${C.magenta}" stroke-width="2"/>
-<rect x="22" y="12" width="${(title.length + 2) * 13 + 18}" height="18" fill="${C.bg}"/>
-<text class="h2" x="32" y="27"><tspan fill="${C.magenta}">» </tspan>${esc(title.toUpperCase())}</text>
-${inner}`, title);
-}
-
-const rows = (list, y0, keyCls = "k", valCls = "v") =>
-  list
-    .map(([k, v], i) => {
-      const y = y0 + i * 30;
-      return `<line x1="40" y1="${y - 5}" x2="800" y2="${y - 5}" stroke="${C.dim}" stroke-width="2" stroke-dasharray="2 4"/>
-<text class="${keyCls} mask" x="40" y="${y}">${esc(k)}</text>
-<text class="${valCls} mask" x="800" y="${y}" text-anchor="end">${esc(v)}</text>`;
-    })
-    .join("\n");
+// ---------- about: a real win64 call ----------
 
 function about() {
-  const text = ABOUT.map(
-    (parts, i) =>
-      `<text class="t" x="40" y="${70 + i * 30}">${parts
-        .map((p) => (Array.isArray(p) ? `<tspan class="${p[1]}">${esc(p[0])}</tspan>` : esc(p)))
-        .join("")}</text>`
-  ).join("\n");
-  const y0 = 70 + ABOUT.length * 30 + 30;
-  return panel("about", y0 + NFO.length * 30 + 20, text + "\n" + rows(NFO, y0));
+  let pc = TEXT;
+  const at = (n) => {
+    const here = pc;
+    pc += n;
+    return here;
+  };
+  const raw = (bytes, mnem, ops, note) => code(at(bytes.length), hex(bytes), mnem, ops, note);
+
+  const LEA = {
+    rcx: [0x48, 0x8d, 0x0d],
+    rdx: [0x48, 0x8d, 0x15],
+    r8: [0x4c, 0x8d, 0x05],
+    r9: [0x4c, 0x8d, 0x0d],
+    rax: [0x48, 0x8d, 0x05],
+  };
+  const lea = (reg, i) => {
+    const [key, value] = NFO[i];
+    const here = at(7);
+    const bytes = [...LEA[reg], ...le32(NFO_AT[i] - pc)];
+    const name = `a${key[0].toUpperCase()}${key.slice(1)}`;
+    return code(here, hex(bytes), "lea", `${reg}, ${name}`, `"${value}"`, "s");
+  };
+
+  const start = pc;
+  const prologue = raw([0x48, 0x83, 0xec, 0x38], "sub", "rsp, 38h");
+  const words = ABOUT.map((parts) => comment(pc, parts));
+  const args = ["rcx", "rdx", "r8", "r9", "rax"].map(lea);
+  const spill = raw([0x48, 0x89, 0x44, 0x24, 0x20], "mov", "[rsp+20h], rax");
+  const callAt = at(5);
+  const call = code(callAt, hex([0xe8, ...le32(WHOAMI - pc)]), "call", "whoami");
+  const epilogue = raw([0x48, 0x83, 0xc4, 0x38], "add", "rsp, 38h");
+  const ret = raw([0xc3], "retn");
+
+  return panel("subroutine", [
+    label(start, "about", "proc near"),
+    prologue,
+    ...words,
+    ...args,
+    spill,
+    call,
+    epilogue,
+    ret,
+    label(pc, "about", "endp"),
+  ]);
 }
 
-const posts = () => panel("latest posts", 70 + POSTS.length * 30 + 20, rows(POSTS, 72));
+// ---------- posts: strings in .rdata ----------
+
+function posts() {
+  const rows = POSTS.map(([date, title], i) => {
+    const bytes = cstr(title);
+    const shown = hex(bytes.slice(0, 6)) + (bytes.length > 6 ? " .." : "");
+    const value = `"${fit(title, COLS - OPS - 18)}",0`;
+    return (y) =>
+      [
+        text(col(0), y, "a", addr(POST_AT[i])),
+        text(col(BYTES), y, "b", shown),
+        text(col(MNEM), y, "m", "db"),
+        text(col(OPS), y, "s", value),
+        right(y, "c", `; ${date}`),
+      ].join("");
+  });
+  return panel(".rdata", [label(POST_AT[0], "posts"), ...rows]);
+}
+
+// ---------- projects: uninitialised, for now ----------
 
 const projects = () =>
-  panel("projects", 112, `<text class="t dim" x="40" y="72">Nothing released yet. <tspan class="link">Watch this space.</tspan></text>`);
+  panel(".bss", [
+    label(BSS, "projects"),
+    code(BSS, "??", "dq", "?", "; nothing released yet"),
+    comment(BSS + 8, [["watch this space", "link"]]),
+  ]);
 
 // ---------- live github panels ----------
-
-const ADV = 9.2; // VT323 at 23px is monospace, 0.4em per char
 
 async function gh(path, token) {
   const headers = { Accept: "application/vnd.github+json", "User-Agent": GH_USER };
@@ -294,9 +321,11 @@ async function fetchGitHub() {
     .slice(0, 6);
   const commits = [];
   for (const r of recent) {
-    const list = await gh(`/repos/${r.full_name}/commits?per_page=10`, pub).catch(() => []);
+    // ?author= misses noreply-email commits, so filter here. The Action's own
+    // commits have no linked account, which leaves c.author null for them.
+    const list = await gh(`/repos/${r.full_name}/commits?per_page=100`, pub).catch(() => []);
     for (const c of list) {
-      if (c.author?.login?.endsWith("[bot]")) continue;
+      if ((c.author?.login ?? c.commit.author.name).endsWith("[bot]")) continue;
       commits.push({ sha: c.sha.slice(0, 7), repo: r.name, msg: c.commit.message.split("\n")[0], date: c.commit.author.date });
     }
   }
@@ -305,111 +334,70 @@ async function fetchGitHub() {
 }
 
 function gitlog(commits) {
-  const y0 = 108;
   const lines = commits.length
-    ? commits
-        .map((c, i) => {
-          const y = y0 + i * 30;
-          const msgX = 40 + (8 + c.repo.length + 1) * ADV;
-          const max = Math.floor((800 - 12 * ADV - msgX) / ADV);
-          const msg = c.msg.length > max ? c.msg.slice(0, max - 1) + "…" : c.msg;
-          return `<text class="t" x="40" y="${y}"><tspan fill="${C.magenta}">${c.sha}</tspan> <tspan class="link">${esc(c.repo)}</tspan> ${esc(msg)}</text>
-<text class="t dim" x="800" y="${y}" text-anchor="end">${c.date.slice(0, 10)}</text>`;
-        })
-        .join("\n")
-    : `<text class="t dim" x="40" y="${y0}">nothing pushed yet.</text>`;
-  const n = Math.max(1, commits.length);
-  return panel("git log", y0 + (n - 1) * 30 + 48, `
-<text class="t ok" x="40" y="72">${GH_USER}@github:~$ <tspan class="hi">git log --oneline -n 6</tspan></text>
-${lines}`);
+    ? commits.map((c) => (y) => {
+        const msgCol = 8 + c.repo.length + 2;
+        return (
+          text(col(0), y, "a", c.sha) +
+          text(col(8), y, "l", c.repo) +
+          text(col(msgCol), y, "", fit(c.msg, COLS - msgCol - 13)) +
+          right(y, "c", c.date.slice(0, 10))
+        );
+      })
+    : [(y) => text(col(0), y, "d", "; nothing pushed yet.")];
+  return panel("git log", [(y) => text(col(0), y, "c", `; ${GH_USER}@github:~$ git log --oneline -n 6`), ...lines]);
 }
 
 function langs(bytes) {
-  const cols = [C.cyan, C.magenta, C.yellow, C.green, "#b4aaff", "#ff8a3f"];
+  const cols = [C.mnem, C.string, C.label, C.note, C.violet, C.bytes];
   const total = Object.values(bytes).reduce((a, b) => a + b, 0);
   let list = Object.entries(bytes).sort((a, b) => b[1] - a[1]);
   if (list.length > 6) list = [...list.slice(0, 5), ["other", list.slice(5).reduce((a, [, v]) => a + v, 0)]];
-  if (!total) return panel("languages", 112, `<text class="t dim" x="40" y="72">no code yet.</text>`);
+  if (!total) return panel("segments", [(y) => text(col(0), y, "d", "; no code yet.")]);
 
-  // stacked bar, grows in from the left
-  let x = 40, bar = "";
+  // the navigation band along the top of a disassembler, one colour per language
+  const span = W - 2 * PAD;
+  let x = PAD, bar = "";
   list.forEach(([, v], i) => {
-    const w = i === list.length - 1 ? 800 - x : Math.round((v / total) * 760);
-    bar += `<rect x="${x}" y="54" width="${w}" height="18" fill="${cols[i]}"/>`;
+    const w = i === list.length - 1 ? W - PAD - x : Math.round((v / total) * span);
+    bar += `<rect x="${x}" width="${w}" height="12" fill="${cols[i]}" shape-rendering="crispEdges"/>`;
     x += w;
   });
 
-  // two columns of name ... pct
-  const y0 = 112, half = Math.ceil(list.length / 2);
-  const rowsSvg = list
-    .map(([k, v], i) => {
-      const col = i < half ? 0 : 1, y = y0 + (i % half) * 30;
-      const x0 = col ? 440 : 40, x1 = col ? 800 : 400;
-      const pct = ((v / total) * 100).toFixed(1) + "%";
-      return `<line x1="${x0}" y1="${y - 5}" x2="${x1}" y2="${y - 5}" stroke="${C.dim}" stroke-width="2" stroke-dasharray="2 4"/>
-<rect x="${x0}" y="${y - 15}" width="14" height="14" fill="${cols[i]}"/>
-<text class="k mask" x="${x0 + 22}" y="${y}">${esc(k)}</text>
-<text class="v mask" x="${x1}" y="${y}" text-anchor="end">${pct}</text>`;
-    })
-    .join("\n");
+  const rows = list.map(([k, v], i) => (y) =>
+    `<rect x="${col(0)}" y="${y - 11}" width="12" height="12" fill="${cols[i]}" shape-rendering="crispEdges"/>` +
+    text(col(3), y, "l", k) +
+    text(col(MNEM), y, "b", `0x${v.toString(16).toUpperCase()}`) +
+    right(y, "", `${((v / total) * 100).toFixed(1)}%`)
+  );
 
-  return panel("languages", y0 + (half - 1) * 30 + 48, `
-<style>.grow{transform-box:view-box;transform-origin:40px 0;animation:gr 1.2s steps(16) both}@keyframes gr{from{transform:scaleX(0)}}</style>
-<rect x="38" y="52" width="764" height="22" fill="none" stroke="${C.dim}" stroke-width="2"/>
-<g class="grow">${bar}</g>
-${rowsSvg}`);
+  return panel("segments", [(y) => `<g transform="translate(0 ${y - 12})">${bar}</g>`, ...rows]);
 }
 
 // ---------- nav buttons ----------
 
-function button(num, label) {
-  // Press Start 2P is a square monospace font: advance = font-size
-  const fs = 12, pad = 14, txt = `${num} ${label}`;
-  const bw = txt.length * fs + pad * 2, bh = 40, sh = 5;
-  return svg(bw + sh + 2, bh + sh + 2, `
-<style>${PIXEL}
-.b{font:${fs}px px,monospace;fill:${C.cyan}}
-.sh{animation:sh 2.4s steps(1) infinite}@keyframes sh{50%{fill:${C.cyan}}}
-${STILL_CSS}</style>
-<rect class="sh" x="${1 + sh}" y="${1 + sh}" width="${bw}" height="${bh}" fill="${C.magenta}" style="animation-delay:${-0.4 * Number(num)}s"/>
-<rect x="1" y="1" width="${bw}" height="${bh}" fill="${C.panel}" stroke="${C.cyan}" stroke-width="2"/>
-<text class="b" x="${1 + pad}" y="${1 + bh / 2 + fs / 2}"><tspan fill="${C.yellow}">${num}</tspan> ${esc(label)}</text>`, label);
+function button(mnem, label) {
+  const fs = 14, adv = fs * 0.6, pad = 14;
+  const bw = Math.ceil((mnem.length + 1 + label.length) * adv + pad * 2), bh = 36;
+  return svg(bw, bh, `
+<style>${REGULAR}
+text{font-family:jb,ui-monospace,monospace;font-size:${fs}px;font-variant-ligatures:none;fill:${C.text}}</style>
+<rect x=".5" y=".5" width="${bw - 1}" height="${bh - 1}" rx="6" fill="${C.band}" stroke="${C.line}"/>
+<text x="${pad}" y="${bh / 2 + 5}"><tspan fill="${C.mnem}">${esc(mnem)}</tspan> ${esc(label)}</text>`, label);
 }
 
-// ---------- sine scroller footer ----------
+// ---------- status bar footer ----------
 
 function footer() {
-  const w = 840, h = 150, fs = 26, cw = fs;
-  const chars = [...SCROLLER];
-  const tw = chars.length * cw;
-  const speed = 130; // px per second
-  const dur = ((w + tw) / speed).toFixed(2);
-  const letters = chars
-    .map((ch, i) => (ch === " " ? "" : `<text x="${i * cw}" y="70" style="animation-delay:${(-i * 0.09).toFixed(2)}s">${esc(ch)}</text>`))
-    .join("");
+  const h = 40, y = 25;
   const body = `
-<style>${PIXEL}${TERM}${STAR_CSS}
-.sc{animation:sc ${dur}s linear infinite}@keyframes sc{from{transform:translateX(${w}px)}to{transform:translateX(${-tw}px)}}
-.sc text{font:${fs}px px,monospace;fill:#fff;animation:wv 1.6s ease-in-out infinite alternate}
-@keyframes wv{from{transform:translateY(-20px)}to{transform:translateY(20px)}}
-.ft{font:21px term,monospace;fill:${C.dim}}
-.hu{animation:hu 6s linear infinite}@keyframes hu{from{transform:translateX(0)}to{transform:translateX(-${w}px)}}
-${STILL_CSS}</style>
-<defs>
-  <linearGradient id="rb" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="${w}" y2="0" spreadMethod="repeat">
-    <stop offset="0" stop-color="${C.cyan}"/><stop offset=".25" stop-color="${C.magenta}"/><stop offset=".5" stop-color="${C.yellow}"/><stop offset=".75" stop-color="${C.green}"/><stop offset="1" stop-color="${C.cyan}"/>
-  </linearGradient>
-  <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="${w}" height="${h}"><g class="sc">${letters}</g></mask>
-  <filter id="sd" x="-5%" y="-30%" width="110%" height="160%"><feDropShadow dx="3" dy="3" stdDeviation="0" flood-color="#000"/><feDropShadow dx="0" dy="0" stdDeviation="4" flood-color="${C.magenta}" flood-opacity=".5"/></filter>
-</defs>
-<rect width="${w}" height="${h}" fill="${C.bg}"/>
-${stars(w, h, 70)}
-<rect y="8" width="${w}" height="2" fill="url(#rb)" opacity=".8"/>
-<g filter="url(#sd)"><g mask="url(#m)"><rect class="hu" x="0" y="0" width="${w * 2}" height="${h}" fill="url(#rb)"/></g></g>
-<rect y="${h - 44}" width="${w}" height="2" fill="url(#rb)" opacity=".8"/>
-<text class="ft" x="${w / 2}" y="${h - 14}" text-anchor="middle">(c) 2026 ickza · made by hand <tspan fill="${C.magenta}">&lt;3</tspan></text>
-${scanlines(w, h)}`;
-  return svg(w, h, body, "ickza footer scroller");
+<style>${REGULAR}${BASE_CSS}</style>
+${card(h, C.band)}
+<circle cx="${PAD + 4}" cy="${y - 5}" r="4" fill="${C.note}"/>
+${text(PAD + 16, y, "b", "AU: idle")}
+${text(col(14), y, "c", `; ${GREETZ}`)}
+<text class="d" x="${W - PAD}" y="${y}" text-anchor="end">(c) 2026 ${esc(NAME)} · made by hand <tspan fill="${C.label}">&lt;3</tspan></text>`;
+  return svg(W, h, body, "ickza footer");
 }
 
 // ---------- write ----------
@@ -423,7 +411,7 @@ out("header.svg", header());
 out("about.svg", about());
 out("posts.svg", posts());
 out("projects.svg", projects());
-for (const [file, num, label] of BUTTONS) out(`btn-${file}.svg`, button(num, label));
+for (const [file, mnem, label] of BUTTONS) out(`btn-${file}.svg`, button(mnem, label));
 out("footer.svg", footer());
 
 // a failed fetch keeps the last committed gitlog/langs instead of blanking them
